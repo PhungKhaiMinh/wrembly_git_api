@@ -221,4 +221,106 @@ async def crop_image(
             "processed_at": datetime.utcnow().isoformat()
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) 
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/v1/config/roi-info/")
+async def update_roi_info(
+    file: UploadFile = File(...),
+    container_client = Depends(get_blob_client)
+):
+    """Upload hoặc cập nhật file roi_info.txt"""
+    try:
+        # Kiểm tra file có phải là text file không
+        if not file.filename.endswith('.txt'):
+            raise HTTPException(status_code=400, detail="Chỉ chấp nhận file .txt")
+        
+        # Đọc nội dung file
+        content = await file.read()
+        
+        try:
+            # Kiểm tra nội dung file có đúng format không
+            text_content = content.decode('utf-8')
+            lines = text_content.split('\n')
+            for line in lines:
+                if line.strip().startswith("Bộ khung"):
+                    # Kiểm tra format "Bộ khung X: Y vùng"
+                    parts = line.strip().split(':')
+                    if len(parts) != 2 or not parts[1].strip().endswith("vùng"):
+                        raise ValueError("Format không hợp lệ")
+                elif line.strip() and not line.strip().startswith("("):
+                    raise ValueError("Format tọa độ không hợp lệ")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="File phải là text file với encoding UTF-8")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Nội dung file không đúng format: {str(e)}")
+        
+        # Upload file với tên cố định là roi_info.txt
+        blob_client = container_client.get_blob_client("roi_info.txt")
+        
+        # Nếu blob đã tồn tại, xóa nó
+        try:
+            blob_client.delete_blob()
+        except:
+            pass
+        
+        # Upload file mới
+        blob_client.upload_blob(content, overwrite=True)
+        
+        return {
+            "message": "File roi_info.txt đã được cập nhật thành công",
+            "uploaded_at": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Lỗi khi cập nhật file: {str(e)}")
+
+@app.get("/api/v1/config/roi-info/")
+async def get_roi_info(container_client = Depends(get_blob_client)):
+    """Lấy nội dung file roi_info.txt"""
+    try:
+        # Lấy blob client cho roi_info.txt
+        blob_client = container_client.get_blob_client("roi_info.txt")
+        
+        # Download nội dung file
+        download_stream = blob_client.download_blob()
+        content = download_stream.readall()
+        
+        # Decode nội dung từ bytes sang text
+        text_content = content.decode('utf-8')
+        
+        # Parse nội dung thành cấu trúc dễ đọc
+        roi_sets = []
+        current_set = None
+        
+        lines = text_content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            if line.startswith("Bộ khung"):
+                if current_set:
+                    roi_sets.append(current_set)
+                current_set = {
+                    "name": line.split(':')[0].strip(),
+                    "count": int(line.split(':')[1].strip().split()[0]),
+                    "regions": []
+                }
+            elif line.startswith("("):
+                # Parse tọa độ
+                coords = tuple(map(int, line.strip("()\n").split(',')))
+                current_set["regions"].append({
+                    "x1": coords[0],
+                    "y1": coords[1],
+                    "x2": coords[2],
+                    "y2": coords[3]
+                })
+        
+        if current_set:
+            roi_sets.append(current_set)
+        
+        return {
+            "roi_sets": roi_sets,
+            "raw_content": text_content
+        }
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Lỗi khi đọc file roi_info.txt: {str(e)}") 
