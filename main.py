@@ -32,6 +32,25 @@ def get_blob_client():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to Azure Storage: {str(e)}")
 
+def get_config_client():
+    """Get blob client for config container"""
+    conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    container_name = "configs"  # Container riêng cho config files
+    
+    if not conn_str:
+        raise HTTPException(status_code=500, detail="Azure Storage connection string not found")
+    
+    try:
+        blob_service = BlobServiceClient.from_connection_string(conn_str)
+        # Tạo container nếu chưa tồn tại
+        try:
+            container_client = blob_service.create_container(container_name)
+        except:
+            container_client = blob_service.get_container_client(container_name)
+        return container_client
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to connect to config container: {str(e)}")
+
 @app.get("/")
 def read_root():
     return {"message": "Hello from Wrembly Image API"}
@@ -226,7 +245,7 @@ async def crop_image(
 @app.post("/api/v1/config/roi-info/")
 async def update_roi_info(
     file: UploadFile = File(...),
-    container_client = Depends(get_blob_client)
+    container_client = Depends(get_config_client)  # Sử dụng config container
 ):
     """Upload hoặc cập nhật file roi_info.txt"""
     try:
@@ -274,7 +293,7 @@ async def update_roi_info(
         raise HTTPException(status_code=400, detail=f"Lỗi khi cập nhật file: {str(e)}")
 
 @app.get("/api/v1/config/roi-info/")
-async def get_roi_info(container_client = Depends(get_blob_client)):
+async def get_roi_info(container_client = Depends(get_config_client)):  # Sử dụng config container
     """Lấy nội dung file roi_info.txt"""
     try:
         # Lấy blob client cho roi_info.txt
