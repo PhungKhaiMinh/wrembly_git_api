@@ -7,6 +7,9 @@ import io
 import uuid
 from datetime import datetime
 import os
+import cv2
+import numpy as np
+import easyocr
 
 app = FastAPI()
 
@@ -342,4 +345,100 @@ async def get_roi_info(container_client = Depends(get_config_client)):  # Sử d
             "raw_content": text_content
         }
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Lỗi khi đọc file roi_info.txt: {str(e)}") 
+        raise HTTPException(status_code=404, detail=f"Lỗi khi đọc file roi_info.txt: {str(e)}")
+
+@app.post("/api/v1/process/ocr/{filename}")
+async def process_ocr(
+    filename: str,
+    set_number: int,
+    container_client = Depends(get_blob_client),
+    config_client = Depends(get_config_client)
+):
+    """Xử lý OCR cho một ảnh đã có trong storage sử dụng ROI từ roi_info.txt"""
+    try:
+        # 1. Lấy ảnh từ storage
+        blob_list = list(container_client.list_blobs(include=['metadata']))
+        storage_blob = None
+        
+        for blob in blob_list:
+            if (blob.metadata and 'original_filename' in blob.metadata and 
+                blob.metadata['original_filename'] == filename):
+                storage_blob = blob
+                break
+        
+        if not storage_blob:
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy ảnh: {filename}")
+        
+        # Download ảnh
+        blob_client = container_client.get_blob_client(storage_blob.name)
+        image_data = blob_client.download_blob().readall()
+        
+        # Chuyển đổi sang định dạng numpy array
+        nparr = np.frombuffer(image_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        # 2. Lấy thông tin ROI từ roi_info.txt
+        config_blob_client = config_client.get_blob_client("roi_info.txt")
+        roi_content = config_blob_client.download_blob().readall().decode('utf-8')
+        
+        # Parse ROI info
+        roi_sets = []
+        current_set = None
+        for line in roi_content.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            
+            if line.startswith("Bộ khung"):
+                if current_set:
+                    roi_sets.append(current_set)
+                current_set = {
+                    "regions": []
+                }
+            elif line.startswith("("):
+                coords = tuple(map(int, line.strip("()\n").split(',')))
+                current_set["regions"].append({
+                    "x1": coords[0],
+                    "y1": coords[1],
+                    "x2": coords[2],
+                    "y2": coords[3]
+                })
+        
+        if current_set:
+            roi_sets.append(current_set)
+            
+        # Kiểm tra set_number hợp lệ
+        if set_number < 0 or set_number >= len(roi_sets):
+            raise HTTPException(status_code=400, detail=f"set_number không hợp lệ. Phải từ 0 đến {len(roi_sets)-1}")
+            
+        # 3. Khởi tạo EasyOCR
+        reader = easyocr.Reader(['vi'])
+        
+        # 4. Xử lý từng vùng ROI và thực hiện OCR
+        results = []
+        for idx, roi in enumerate(roi_sets[set_number]["regions"]):
+            # Cắt ảnh theo ROI
+            x1, y1, x2, y2 = roi["x1"], roi["y1"], roi["x2"], roi["y2"]
+            roi_img = img[y1:y2, x1:x2]
+            
+            # Thực hiện OCR
+            ocr_result = reader.readtext(roi_img)
+            
+            # Lấy text từ kết quả OCR
+            text = " ".join([res[1] for res in ocr_result]) if ocr_result else ""
+            
+            results.append({
+                "region_index": idx,
+                "coordinates": f"({x1},{y1},{x2},{y2})",
+                "text": text
+            })
+        
+        return {
+            "filename": filename,
+            "set_number": set_number,
+            "results": results,
+            "processed_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Lỗi khi xử lý OCR: {str(e)}")
