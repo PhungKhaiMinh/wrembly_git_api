@@ -60,14 +60,33 @@ async def upload_image(
 @app.get("/api/v1/images/")
 async def list_images(container_client = Depends(get_blob_client)):
     try:
-        blobs = container_client.list_blobs()
-        return [{
-            "filename": blob.metadata.get('original_filename', blob.name) if blob.metadata else blob.name,
-            "size": blob.size,
-            "created_at": blob.creation_time.isoformat()
-        } for blob in blobs]
+        # Lấy danh sách blob kèm theo metadata
+        blobs = list(container_client.list_blobs(include=['metadata']))
+        result = []
+        
+        for blob in blobs:
+            # Lấy thông tin từ metadata
+            original_filename = blob.metadata.get('original_filename', blob.name) if blob.metadata else blob.name
+            
+            # Lấy URL của blob
+            blob_client = container_client.get_blob_client(blob.name)
+            
+            # Tạo thông tin chi tiết cho mỗi ảnh
+            image_info = {
+                "storage_filename": blob.name,  # Tên file trong storage
+                "original_filename": original_filename,  # Tên file gốc
+                "size": blob.size,
+                "url": blob_client.url,
+                "created_at": blob.creation_time.isoformat(),
+                "content_type": blob.content_settings.content_type if blob.content_settings else None
+            }
+            result.append(image_info)
+        
+        # Sắp xếp theo thời gian tạo, mới nhất lên đầu
+        result.sort(key=lambda x: x['created_at'], reverse=True)
+        return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Lỗi khi lấy danh sách ảnh: {str(e)}")
 
 @app.get("/api/v1/images/{filename}")
 async def get_image_info(filename: str, container_client = Depends(get_blob_client)):
