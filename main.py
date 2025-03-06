@@ -95,25 +95,76 @@ async def get_image_info(filename: str, container_client = Depends(get_blob_clie
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-@app.delete("/api/v1/images/{filename}")
-async def delete_image(filename: str, container_client = Depends(get_blob_client)):
+@app.get("/api/v1/download/{filename}")
+async def download_image(filename: str, container_client = Depends(get_blob_client)):
+    """Tải ảnh về từ storage"""
     try:
-        blobs = container_client.list_blobs()
+        # Liệt kê tất cả các blob và tìm blob phù hợp
+        blob_list = list(container_client.list_blobs(include=['metadata']))
         storage_blob = None
         
-        for blob in blobs:
-            if blob.metadata and blob.metadata.get('original_filename') == filename:
+        for blob in blob_list:
+            if (blob.metadata and 'original_filename' in blob.metadata and 
+                blob.metadata['original_filename'] == filename):
                 storage_blob = blob
                 break
         
         if not storage_blob:
-            raise HTTPException(status_code=404, detail="Image not found")
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy ảnh: {filename}")
             
+        # Lấy blob client và download ảnh
+        blob_client = container_client.get_blob_client(storage_blob.name)
+        download_stream = blob_client.download_blob()
+        
+        # Xác định content type dựa trên phần mở rộng của file
+        content_type = "image/jpeg"  # default
+        if filename.lower().endswith('.png'):
+            content_type = "image/png"
+        elif filename.lower().endswith('.gif'):
+            content_type = "image/gif"
+        elif filename.lower().endswith('.bmp'):
+            content_type = "image/bmp"
+        
+        # Trả về response dạng stream
+        return StreamingResponse(
+            download_stream.chunks(),
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Type": content_type
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Lỗi khi tải ảnh: {str(e)}")
+
+@app.delete("/api/v1/images/{filename}")
+async def delete_image(filename: str, container_client = Depends(get_blob_client)):
+    """Xóa một ảnh"""
+    try:
+        # Liệt kê tất cả các blob và tìm blob phù hợp
+        blob_list = list(container_client.list_blobs(include=['metadata']))
+        storage_blob = None
+        
+        for blob in blob_list:
+            if (blob.metadata and 'original_filename' in blob.metadata and 
+                blob.metadata['original_filename'] == filename):
+                storage_blob = blob
+                break
+        
+        if not storage_blob:
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy ảnh: {filename}")
+            
+        # Xóa blob
         blob_client = container_client.get_blob_client(storage_blob.name)
         blob_client.delete_blob()
-        return {"message": f"Successfully deleted {filename}"}
+        
+        return {
+            "message": f"Đã xóa ảnh {filename} thành công",
+            "filename": filename,
+            "deleted_at": datetime.utcnow().isoformat()
+        }
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=f"Lỗi khi xóa ảnh: {str(e)}")
 
 @app.post("/api/v1/process/grayscale/")
 async def convert_to_grayscale(
@@ -177,35 +228,4 @@ async def crop_image(
             "processed_at": datetime.utcnow().isoformat()
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/api/v1/download/{filename}")
-async def download_image(filename: str, container_client = Depends(get_blob_client)):
-    """Tải ảnh về từ storage"""
-    try:
-        # Tìm blob có original_filename trùng với filename
-        blobs = container_client.list_blobs()
-        storage_blob = None
-        
-        for blob in blobs:
-            if blob.metadata and blob.metadata.get('original_filename') == filename:
-                storage_blob = blob
-                break
-        
-        if not storage_blob:
-            raise HTTPException(status_code=404, detail="Không tìm thấy ảnh")
-            
-        # Lấy blob client và download ảnh
-        blob_client = container_client.get_blob_client(storage_blob.name)
-        download_stream = blob_client.download_blob()
-        
-        # Trả về response dạng stream với content type phù hợp
-        return StreamingResponse(
-            download_stream.chunks(),
-            media_type="image/jpeg",  # Có thể thay đổi tùy theo loại ảnh
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e)) 
+        raise HTTPException(status_code=400, detail=str(e)) 
