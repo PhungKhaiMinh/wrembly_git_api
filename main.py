@@ -88,32 +88,6 @@ async def list_images(container_client = Depends(get_blob_client)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Lỗi khi lấy danh sách ảnh: {str(e)}")
 
-@app.get("/api/v1/images/{filename}")
-async def get_image_info(filename: str, container_client = Depends(get_blob_client)):
-    try:
-        blobs = container_client.list_blobs()
-        storage_blob = None
-        
-        for blob in blobs:
-            if blob.metadata and blob.metadata.get('original_filename') == filename:
-                storage_blob = blob
-                break
-        
-        if not storage_blob:
-            raise HTTPException(status_code=404, detail="Image not found")
-            
-        blob_client = container_client.get_blob_client(storage_blob.name)
-        properties = blob_client.get_blob_properties()
-        
-        return {
-            "filename": filename,
-            "url": blob_client.url,
-            "size": properties.size,
-            "created_at": properties.creation_time.isoformat()
-        }
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
 @app.get("/api/v1/download/{filename}")
 async def download_image(filename: str, container_client = Depends(get_blob_client)):
     """Tải ảnh về từ storage"""
