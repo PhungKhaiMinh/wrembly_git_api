@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from azure.storage.blob import BlobServiceClient
 from PIL import Image
 import io
@@ -177,4 +177,35 @@ async def crop_image(
             "processed_at": datetime.utcnow().isoformat()
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) 
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/v1/download/{filename}")
+async def download_image(filename: str, container_client = Depends(get_blob_client)):
+    """Tải ảnh về từ storage"""
+    try:
+        # Tìm blob có original_filename trùng với filename
+        blobs = container_client.list_blobs()
+        storage_blob = None
+        
+        for blob in blobs:
+            if blob.metadata and blob.metadata.get('original_filename') == filename:
+                storage_blob = blob
+                break
+        
+        if not storage_blob:
+            raise HTTPException(status_code=404, detail="Không tìm thấy ảnh")
+            
+        # Lấy blob client và download ảnh
+        blob_client = container_client.get_blob_client(storage_blob.name)
+        download_stream = blob_client.download_blob()
+        
+        # Trả về response dạng stream với content type phù hợp
+        return StreamingResponse(
+            download_stream.chunks(),
+            media_type="image/jpeg",  # Có thể thay đổi tùy theo loại ảnh
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) 
