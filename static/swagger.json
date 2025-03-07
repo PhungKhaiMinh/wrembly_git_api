@@ -116,21 +116,85 @@
         }
       }
     },
-    "/api/ocr/{filename}": {
+    "/api/ocr": {
       "post": {
-        "summary": "Process OCR on an image",
+        "summary": "Process OCR on an image using ROI coordinates based on current set order",
+        "parameters": [
+          {
+            "in": "formData",
+            "name": "file",
+            "type": "file",
+            "required": true,
+            "description": "The image file to process OCR"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OCR results",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "set_order": {
+                  "type": "integer",
+                  "description": "Current set order used for processing"
+                },
+                "results": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "roi_index": {
+                        "type": "integer",
+                        "description": "Index of the ROI"
+                      },
+                      "coordinates": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "description": "ROI coordinates [x1, y1, x2, y2]"
+                      },
+                      "text": {
+                        "type": "string",
+                        "description": "OCR result text"
+                      }
+                    }
+                  }
+                },
+                "result_file": {
+                  "type": "string",
+                  "description": "Name of the saved result file"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/api/ocr-results/{filename}": {
+      "get": {
+        "summary": "Get OCR result from a specific file",
         "parameters": [
           {
             "in": "path",
             "name": "filename",
             "type": "string",
             "required": true,
-            "description": "The filename to process OCR"
+            "description": "The OCR result file to retrieve"
           }
         ],
         "responses": {
           "200": {
-            "description": "OCR result"
+            "description": "OCR result content"
+          },
+          "404": {
+            "description": "Result file not found"
           },
           "500": {
             "description": "Server error"

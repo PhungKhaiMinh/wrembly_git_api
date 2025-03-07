@@ -11,6 +11,7 @@ import pytesseract
 from PIL import Image
 import io
 from flask_swagger_ui import get_swaggerui_blueprint
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,14 +35,17 @@ try:
     container_name = os.getenv('AZURE_STORAGE_CONTAINER_NAME')
     config_container_name = os.getenv('AZURE_STORAGE_CONFIG_CONTAINER_NAME')
     set_order_container_name = os.getenv('AZURE_STORAGE_SET_ORDER_CONTAINER_NAME')
+    ocr_results_container_name = os.getenv('AZURE_STORAGE_OCR_RESULTS_CONTAINER_NAME')
 
-    if not all([connection_string, container_name, config_container_name, set_order_container_name]):
+    if not all([connection_string, container_name, config_container_name, 
+                set_order_container_name, ocr_results_container_name]):
         raise ValueError("Missing required environment variables")
 
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
     container_client = blob_service_client.get_container_client(container_name)
     config_container_client = blob_service_client.get_container_client(config_container_name)
     set_order_container_client = blob_service_client.get_container_client(set_order_container_name)
+    ocr_results_container_client = blob_service_client.get_container_client(ocr_results_container_name)
 except Exception as e:
     logger.error(f"Failed to initialize Azure Storage: {str(e)}")
     raise
@@ -80,6 +84,38 @@ def process_image_with_tesseract(image):
     except Exception as e:
         logger.error(f"Error in Tesseract processing: {str(e)}")
         return None
+
+def get_roi_coordinates(set_order):
+    """Get ROI coordinates for the specified set order"""
+    try:
+        # Get ROI info content
+        roi_blob_client = config_container_client.get_blob_client('roi_info.txt')
+        roi_content = roi_blob_client.download_blob().readall().decode('utf-8')
+        
+        # Parse ROI content
+        lines = roi_content.strip().split('\n')
+        current_set = None
+        coordinates = []
+        
+        for line in lines:
+            if line.startswith('Bộ khung'):
+                if current_set is not None:
+                    if current_set == set_order:
+                        return coordinates
+                current_set = int(line.split(':')[0].split()[2])
+                coordinates = []
+            elif line.strip().startswith('('):
+                # Parse coordinates (x1, y1, x2, y2)
+                coords = line.strip('()').split(',')
+                coordinates.append([int(x.strip()) for x in coords])
+        
+        if current_set == set_order:
+            return coordinates
+        
+        raise ValueError(f"Set order {set_order} not found in ROI info")
+    except Exception as e:
+        logger.error(f"Error getting ROI coordinates: {str(e)}")
+        raise
 
 @app.route('/')
 def home():
@@ -241,41 +277,99 @@ def get_roi_info():
         logger.error(f"Error in get_roi_info: {str(e)}")
         return jsonify({'error': str(e)}), 404
 
-@app.route('/api/ocr/<filename>', methods=['POST'])
-def process_ocr(filename):
+@app.route('/api/ocr', methods=['POST'])
+def process_ocr():
     """
-    Process OCR on an image
+    Process OCR on an image using ROI coordinates based on current set order
+    ---
+    parameters:
+      - in: formData
+        name: file
+        type: file
+        required: true
+        description: The image file to process OCR
+    responses:
+      200:
+        description: OCR results
+      400:
+        description: Invalid input
+      500:
+        description: Server error
+    """
+    try:
+        # Get current set order
+        set_order_blob_client = set_order_container_client.get_blob_client('set_order.txt')
+        set_order = int(set_order_blob_client.download_blob().readall().decode('utf-8'))
+        
+        # Get ROI coordinates for current set order
+        roi_coordinates = get_roi_coordinates(set_order)
+        
+        # Get image from request
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
+        
+        # Read and process image
+        image_data = file.read()
+        nparr = np.frombuffer(image_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        # Process OCR for each ROI
+        results = []
+        for i, coords in enumerate(roi_coordinates):
+            x1, y1, x2, y2 = coords
+            roi = img[y1:y2, x1:x2]
+            text = process_image_with_tesseract(roi)
+            results.append({
+                'roi_index': i + 1,
+                'coordinates': coords,
+                'text': text
+            })
+        
+        # Save results to OCR results container
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        result_filename = f"ocr_result_{timestamp}.json"
+        result_blob_client = ocr_results_container_client.get_blob_client(result_filename)
+        result_blob_client.upload_blob(json.dumps(results, ensure_ascii=False), overwrite=True)
+        
+        return jsonify({
+            'set_order': set_order,
+            'results': results,
+            'result_file': result_filename
+        })
+    except Exception as e:
+        logger.error(f"Error in OCR processing: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ocr-results/<filename>', methods=['GET'])
+def get_ocr_result(filename):
+    """
+    Get OCR result from a specific file
     ---
     parameters:
       - in: path
         name: filename
         type: string
         required: true
-        description: The filename to process OCR
+        description: The OCR result file to retrieve
     responses:
       200:
-        description: OCR result
+        description: OCR result content
+      404:
+        description: Result file not found
       500:
         description: Server error
     """
     try:
-        # Get image from storage
-        blob_client = container_client.get_blob_client(filename)
-        image_data = blob_client.download_blob().readall()
-        
-        # Convert to numpy array
-        nparr = np.frombuffer(image_data, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        # Process with Tesseract
-        text = process_image_with_tesseract(img)
-        
-        return jsonify({
-            'text': text
-        })
+        blob_client = ocr_results_container_client.get_blob_client(filename)
+        result_content = blob_client.download_blob().readall().decode('utf-8')
+        return jsonify(json.loads(result_content))
     except Exception as e:
-        logger.error(f"Error in OCR processing: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error getting OCR result: {str(e)}")
+        return jsonify({'error': str(e)}), 404
 
 @app.route('/api/set-order', methods=['POST'])
 def update_set_order():
