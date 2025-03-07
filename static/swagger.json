@@ -137,6 +137,52 @@
           }
         }
       }
+    },
+    "/api/set-order": {
+      "post": {
+        "summary": "Update set order information",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "schema": {
+              "type": "object",
+              "required": ["set_number"],
+              "properties": {
+                "set_number": {
+                  "type": "integer",
+                  "description": "The set number to store"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Set order updated successfully"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      },
+      "get": {
+        "summary": "Get current set order information",
+        "responses": {
+          "200": {
+            "description": "Current set order information"
+          },
+          "404": {
+            "description": "Set order not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
     }
   }
 } 

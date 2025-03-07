@@ -33,13 +33,15 @@ try:
     connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
     container_name = os.getenv('AZURE_STORAGE_CONTAINER_NAME')
     config_container_name = os.getenv('AZURE_STORAGE_CONFIG_CONTAINER_NAME')
+    set_order_container_name = os.getenv('AZURE_STORAGE_SET_ORDER_CONTAINER_NAME')
 
-    if not all([connection_string, container_name, config_container_name]):
+    if not all([connection_string, container_name, config_container_name, set_order_container_name]):
         raise ValueError("Missing required environment variables")
 
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
     container_client = blob_service_client.get_container_client(container_name)
     config_container_client = blob_service_client.get_container_client(config_container_name)
+    set_order_container_client = blob_service_client.get_container_client(set_order_container_name)
 except Exception as e:
     logger.error(f"Failed to initialize Azure Storage: {str(e)}")
     raise
@@ -274,6 +276,70 @@ def process_ocr(filename):
     except Exception as e:
         logger.error(f"Error in OCR processing: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/set-order', methods=['POST'])
+def update_set_order():
+    """
+    Update set order information
+    ---
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - set_number
+          properties:
+            set_number:
+              type: integer
+              description: The set number to store
+    responses:
+      200:
+        description: Set order updated successfully
+      400:
+        description: Invalid input
+      500:
+        description: Server error
+    """
+    try:
+        data = request.get_json()
+        if not data or 'set_number' not in data:
+            return jsonify({'error': 'Missing set_number in request body'}), 400
+        
+        set_number = data['set_number']
+        if not isinstance(set_number, int):
+            return jsonify({'error': 'set_number must be an integer'}), 400
+        
+        # Store the set number in a file
+        blob_client = set_order_container_client.get_blob_client('set_order.json')
+        content = {'set_number': set_number}
+        blob_client.upload_blob(str(content), overwrite=True)
+        
+        return jsonify({'message': 'Set order updated successfully', 'set_number': set_number})
+    except Exception as e:
+        logger.error(f"Error in update_set_order: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/set-order', methods=['GET'])
+def get_set_order():
+    """
+    Get current set order information
+    ---
+    responses:
+      200:
+        description: Current set order information
+      404:
+        description: Set order not found
+      500:
+        description: Server error
+    """
+    try:
+        blob_client = set_order_container_client.get_blob_client('set_order.json')
+        content = blob_client.download_blob().readall().decode('utf-8')
+        return jsonify(eval(content))
+    except Exception as e:
+        logger.error(f"Error in get_set_order: {str(e)}")
+        return jsonify({'error': str(e)}), 404
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
