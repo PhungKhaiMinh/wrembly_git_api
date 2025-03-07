@@ -10,12 +10,23 @@ import logging
 import pytesseract
 from PIL import Image
 import io
+from flask_swagger_ui import get_swaggerui_blueprint
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+SWAGGER_URL = '/docs'
+API_URL = '/static/swagger.json'
+swaggerui_blueprint = get_swaggerui_blueprint(
+    SWAGGER_URL,
+    API_URL,
+    config={
+        'app_name': "Wrembly Image API"
+    }
+)
+app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
 # Azure Storage configuration
 try:
@@ -70,10 +81,34 @@ def process_image_with_tesseract(image):
 
 @app.route('/')
 def home():
+    """
+    Welcome endpoint
+    ---
+    responses:
+      200:
+        description: Welcome message
+    """
     return jsonify({"message": "Welcome to Wrembly Image API"})
 
 @app.route('/api/upload', methods=['POST'])
 def upload_image():
+    """
+    Upload an image to Azure Storage
+    ---
+    parameters:
+      - in: formData
+        name: file
+        type: file
+        required: true
+        description: The image file to upload
+    responses:
+      200:
+        description: File uploaded successfully
+      400:
+        description: No file part or no selected file
+      500:
+        description: Server error
+    """
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'}), 400
@@ -100,6 +135,15 @@ def upload_image():
 
 @app.route('/api/images', methods=['GET'])
 def list_images():
+    """
+    List all images in Azure Storage
+    ---
+    responses:
+      200:
+        description: List of images
+      500:
+        description: Server error
+    """
     try:
         blobs = container_client.list_blobs()
         images = []
@@ -116,6 +160,21 @@ def list_images():
 
 @app.route('/api/images/<filename>', methods=['DELETE'])
 def delete_image(filename):
+    """
+    Delete an image from Azure Storage
+    ---
+    parameters:
+      - in: path
+        name: filename
+        type: string
+        required: true
+        description: The filename to delete
+    responses:
+      200:
+        description: File deleted successfully
+      404:
+        description: File not found
+    """
     try:
         blob_client = container_client.get_blob_client(filename)
         blob_client.delete_blob()
@@ -126,6 +185,23 @@ def delete_image(filename):
 
 @app.route('/api/roi-info', methods=['POST'])
 def update_roi_info():
+    """
+    Update ROI information file
+    ---
+    parameters:
+      - in: formData
+        name: file
+        type: file
+        required: true
+        description: The ROI info file to upload
+    responses:
+      200:
+        description: ROI info updated successfully
+      400:
+        description: Invalid file or no file part
+      500:
+        description: Server error
+    """
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'}), 400
@@ -146,6 +222,15 @@ def update_roi_info():
 
 @app.route('/api/roi-info', methods=['GET'])
 def get_roi_info():
+    """
+    Get ROI information
+    ---
+    responses:
+      200:
+        description: ROI information content
+      404:
+        description: ROI info file not found
+    """
     try:
         blob_client = config_container_client.get_blob_client('roi_info.txt')
         roi_content = blob_client.download_blob().readall().decode('utf-8')
@@ -156,6 +241,21 @@ def get_roi_info():
 
 @app.route('/api/ocr/<filename>', methods=['POST'])
 def process_ocr(filename):
+    """
+    Process OCR on an image
+    ---
+    parameters:
+      - in: path
+        name: filename
+        type: string
+        required: true
+        description: The filename to process OCR
+    responses:
+      200:
+        description: OCR result
+      500:
+        description: Server error
+    """
     try:
         # Get image from storage
         blob_client = container_client.get_blob_client(filename)

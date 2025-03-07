@@ -1,0 +1,142 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Wrembly Image API",
+    "description": "API for image processing and OCR",
+    "version": "1.0.0"
+  },
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Welcome endpoint",
+        "responses": {
+          "200": {
+            "description": "Welcome message"
+          }
+        }
+      }
+    },
+    "/api/upload": {
+      "post": {
+        "summary": "Upload an image to Azure Storage",
+        "parameters": [
+          {
+            "in": "formData",
+            "name": "file",
+            "type": "file",
+            "required": true,
+            "description": "The image file to upload"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File uploaded successfully"
+          },
+          "400": {
+            "description": "No file part or no selected file"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/api/images": {
+      "get": {
+        "summary": "List all images in Azure Storage",
+        "responses": {
+          "200": {
+            "description": "List of images"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/api/images/{filename}": {
+      "delete": {
+        "summary": "Delete an image from Azure Storage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "filename",
+            "type": "string",
+            "required": true,
+            "description": "The filename to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File deleted successfully"
+          },
+          "404": {
+            "description": "File not found"
+          }
+        }
+      }
+    },
+    "/api/roi-info": {
+      "post": {
+        "summary": "Update ROI information file",
+        "parameters": [
+          {
+            "in": "formData",
+            "name": "file",
+            "type": "file",
+            "required": true,
+            "description": "The ROI info file to upload"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ROI info updated successfully"
+          },
+          "400": {
+            "description": "Invalid file or no file part"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      },
+      "get": {
+        "summary": "Get ROI information",
+        "responses": {
+          "200": {
+            "description": "ROI information content"
+          },
+          "404": {
+            "description": "ROI info file not found"
+          }
+        }
+      }
+    },
+    "/api/ocr/{filename}": {
+      "post": {
+        "summary": "Process OCR on an image",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "filename",
+            "type": "string",
+            "required": true,
+            "description": "The filename to process OCR"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OCR result"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    }
+  }
+} 
