@@ -6,8 +6,10 @@ import uuid
 from datetime import datetime
 import cv2
 import numpy as np
-import easyocr
 import logging
+import pytesseract
+from PIL import Image
+import io
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +32,41 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Azure Storage: {str(e)}")
     raise
+
+def preprocess_image(image):
+    """Preprocess image for better OCR results"""
+    try:
+        # Convert to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply thresholding to preprocess the image
+        gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        
+        # Apply dilation to connect text components
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
+        gray = cv2.dilate(gray, kernel, iterations=1)
+        
+        return gray
+    except Exception as e:
+        logger.error(f"Error in image preprocessing: {str(e)}")
+        return image
+
+def process_image_with_tesseract(image):
+    """Process image using Tesseract OCR"""
+    try:
+        # Preprocess image
+        processed_image = preprocess_image(image)
+        
+        # Convert numpy array to PIL Image
+        pil_image = Image.fromarray(processed_image)
+        
+        # Perform OCR
+        text = pytesseract.image_to_string(pil_image, lang='vie+eng')
+        
+        return text.strip()
+    except Exception as e:
+        logger.error(f"Error in Tesseract processing: {str(e)}")
+        return None
 
 @app.route('/')
 def home():
@@ -116,6 +153,27 @@ def get_roi_info():
     except Exception as e:
         logger.error(f"Error in get_roi_info: {str(e)}")
         return jsonify({'error': str(e)}), 404
+
+@app.route('/api/ocr/<filename>', methods=['POST'])
+def process_ocr(filename):
+    try:
+        # Get image from storage
+        blob_client = container_client.get_blob_client(filename)
+        image_data = blob_client.download_blob().readall()
+        
+        # Convert to numpy array
+        nparr = np.frombuffer(image_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        # Process with Tesseract
+        text = process_image_with_tesseract(img)
+        
+        return jsonify({
+            'text': text
+        })
+    except Exception as e:
+        logger.error(f"Error in OCR processing: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
