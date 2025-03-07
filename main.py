@@ -280,7 +280,7 @@ def process_ocr(filename):
 @app.route('/api/set-order', methods=['POST'])
 def update_set_order():
     """
-    Update set order information
+    Update set order value
     ---
     parameters:
       - in: body
@@ -288,11 +288,11 @@ def update_set_order():
         schema:
           type: object
           required:
-            - set_number
+            - value
           properties:
-            set_number:
+            value:
               type: integer
-              description: The set number to store
+              description: The new set order value
     responses:
       200:
         description: Set order updated successfully
@@ -303,19 +303,20 @@ def update_set_order():
     """
     try:
         data = request.get_json()
-        if not data or 'set_number' not in data:
-            return jsonify({'error': 'Missing set_number in request body'}), 400
+        if not data or 'value' not in data:
+            return jsonify({'error': 'Missing value in request body'}), 400
         
-        set_number = data['set_number']
-        if not isinstance(set_number, int):
-            return jsonify({'error': 'set_number must be an integer'}), 400
+        value = data['value']
+        if not isinstance(value, int):
+            return jsonify({'error': 'Value must be an integer'}), 400
+
+        blob_client = set_order_container_client.get_blob_client('set_order.txt')
+        blob_client.upload_blob(str(value), overwrite=True)
         
-        # Store the set number in a file
-        blob_client = set_order_container_client.get_blob_client('set_order.json')
-        content = {'set_number': set_number}
-        blob_client.upload_blob(str(content), overwrite=True)
-        
-        return jsonify({'message': 'Set order updated successfully', 'set_number': set_number})
+        return jsonify({
+            'message': 'Set order updated successfully',
+            'value': value
+        })
     except Exception as e:
         logger.error(f"Error in update_set_order: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -323,20 +324,20 @@ def update_set_order():
 @app.route('/api/set-order', methods=['GET'])
 def get_set_order():
     """
-    Get current set order information
+    Get current set order value
     ---
     responses:
       200:
-        description: Current set order information
+        description: Current set order value
       404:
         description: Set order not found
       500:
         description: Server error
     """
     try:
-        blob_client = set_order_container_client.get_blob_client('set_order.json')
-        content = blob_client.download_blob().readall().decode('utf-8')
-        return jsonify(eval(content))
+        blob_client = set_order_container_client.get_blob_client('set_order.txt')
+        value = blob_client.download_blob().readall().decode('utf-8')
+        return jsonify({'value': int(value)})
     except Exception as e:
         logger.error(f"Error in get_set_order: {str(e)}")
         return jsonify({'error': str(e)}), 404

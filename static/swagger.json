@@ -140,18 +140,18 @@
     },
     "/api/set-order": {
       "post": {
-        "summary": "Update set order information",
+        "summary": "Update set order value",
         "parameters": [
           {
             "in": "body",
             "name": "body",
             "schema": {
               "type": "object",
-              "required": ["set_number"],
+              "required": ["value"],
               "properties": {
-                "set_number": {
+                "value": {
                   "type": "integer",
-                  "description": "The set number to store"
+                  "description": "The new set order value"
                 }
               }
             }
@@ -170,10 +170,10 @@
         }
       },
       "get": {
-        "summary": "Get current set order information",
+        "summary": "Get current set order value",
         "responses": {
           "200": {
-            "description": "Current set order information"
+            "description": "Current set order value"
           },
           "404": {
             "description": "Set order not found"
