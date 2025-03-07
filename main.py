@@ -21,63 +21,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Azure Storage configuration
+connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+container_name = "images"
+config_container_name = "configs"
+
 def get_blob_client():
-    conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-    container_name = os.getenv("AZURE_STORAGE_CONTAINER_NAME", "images")
-    
-    if not conn_str:
-        raise HTTPException(status_code=500, detail="Azure Storage connection string not found")
-    
-    try:
-        blob_service = BlobServiceClient.from_connection_string(conn_str)
-        container_client = blob_service.get_container_client(container_name)
-        return container_client
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to connect to Azure Storage: {str(e)}")
+    """Get blob client for images container"""
+    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+    container_client = blob_service_client.get_container_client(container_name)
+    return container_client
 
 def get_config_client():
     """Get blob client for config container"""
-    conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-    container_name = "configs"  # Container riêng cho config files
-    
-    if not conn_str:
-        raise HTTPException(status_code=500, detail="Azure Storage connection string not found")
-    
+    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
     try:
-        blob_service = BlobServiceClient.from_connection_string(conn_str)
-        # Tạo container nếu chưa tồn tại
-        try:
-            container_client = blob_service.create_container(container_name)
-        except:
-            container_client = blob_service.get_container_client(container_name)
-        return container_client
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to connect to config container: {str(e)}")
+        container_client = blob_service_client.get_container_client(config_container_name)
+        container_client.get_container_properties()
+    except Exception:
+        # Create container if it doesn't exist
+        container_client = blob_service_client.create_container(config_container_name)
+    return container_client
 
 @app.get("/")
 def read_root():
     return {"message": "Hello from Wrembly Image API"}
 
-@app.post("/api/v1/upload/")
-async def upload_image(
-    file: UploadFile = File(...),
-    container_client = Depends(get_blob_client)
-):
+@app.post("/api/v1/upload")
+async def upload_file(file: UploadFile = File(...)):
     try:
-        content = await file.read()
-        original_filename = file.filename
-        storage_filename = f"{uuid.uuid4()}{os.path.splitext(original_filename)[1]}"
+        container_client = get_blob_client()
         
-        blob_client = container_client.get_blob_client(storage_filename)
-        blob_client.upload_blob(content, metadata={"original_filename": original_filename})
+        # Read file content
+        contents = await file.read()
         
-        return {
-            "filename": original_filename,
-            "url": blob_client.url,
-            "uploaded_at": datetime.utcnow().isoformat()
-        }
+        # Verify if it's an image
+        try:
+            img = Image.open(io.BytesIO(contents))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid image")
+        
+        # Generate unique filename
+        file_extension = os.path.splitext(file.filename)[1]
+        blob_name = f"{uuid.uuid4()}{file_extension}"
+        
+        # Upload to Azure Storage
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(contents, blob_type="BlockBlob", metadata={"original_filename": file.filename})
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": "File uploaded successfully",
+                "filename": file.filename,
+                "blob_name": blob_name
+            }
+        )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/images/")
 async def list_images(container_client = Depends(get_blob_client)):
@@ -111,10 +112,11 @@ async def list_images(container_client = Depends(get_blob_client)):
         raise HTTPException(status_code=400, detail=f"Lỗi khi lấy danh sách ảnh: {str(e)}")
 
 @app.get("/api/v1/download/{filename}")
-async def download_image(filename: str, container_client = Depends(get_blob_client)):
-    """Tải ảnh về từ storage"""
+async def download_file(filename: str):
     try:
-        # Liệt kê tất cả các blob và tìm blob phù hợp
+        container_client = get_blob_client()
+        
+        # Find blob by original filename
         blob_list = list(container_client.list_blobs(include=['metadata']))
         storage_blob = None
         
@@ -125,32 +127,21 @@ async def download_image(filename: str, container_client = Depends(get_blob_clie
                 break
         
         if not storage_blob:
-            raise HTTPException(status_code=404, detail=f"Không tìm thấy ảnh: {filename}")
-            
-        # Lấy blob client và download ảnh
+            raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+        
+        # Download blob
         blob_client = container_client.get_blob_client(storage_blob.name)
         download_stream = blob_client.download_blob()
         
-        # Xác định content type dựa trên phần mở rộng của file
-        content_type = "image/jpeg"  # default
-        if filename.lower().endswith('.png'):
-            content_type = "image/png"
-        elif filename.lower().endswith('.gif'):
-            content_type = "image/gif"
-        elif filename.lower().endswith('.bmp'):
-            content_type = "image/bmp"
-        
-        # Trả về response dạng stream
         return StreamingResponse(
             download_stream.chunks(),
-            media_type=content_type,
+            media_type="application/octet-stream",
             headers={
-                "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Type": content_type
+                "Content-Disposition": f"attachment; filename={filename}"
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Lỗi khi tải ảnh: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/v1/images/{filename}")
 async def delete_image(filename: str, container_client = Depends(get_blob_client)):
@@ -245,107 +236,42 @@ async def crop_image(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/api/v1/config/roi-info/")
-async def update_roi_info(
-    file: UploadFile = File(...),
-    container_client = Depends(get_config_client)  # Sử dụng config container
-):
-    """Upload hoặc cập nhật file roi_info.txt"""
+@app.post("/api/v1/config/roi-info")
+async def upload_roi_info(file: UploadFile = File(...)):
     try:
-        # Kiểm tra file có phải là text file không
-        if not file.filename.endswith('.txt'):
-            raise HTTPException(status_code=400, detail="Chỉ chấp nhận file .txt")
+        if file.filename != "roi_info.txt":
+            raise HTTPException(status_code=400, detail="File must be named roi_info.txt")
         
-        # Đọc nội dung file
-        content = await file.read()
+        container_client = get_config_client()
+        contents = await file.read()
         
-        try:
-            # Kiểm tra nội dung file có đúng format không
-            text_content = content.decode('utf-8')
-            lines = text_content.split('\n')
-            for line in lines:
-                if line.strip().startswith("Bộ khung"):
-                    # Kiểm tra format "Bộ khung X: Y vùng"
-                    parts = line.strip().split(':')
-                    if len(parts) != 2 or not parts[1].strip().endswith("vùng"):
-                        raise ValueError("Format không hợp lệ")
-                elif line.strip() and not line.strip().startswith("("):
-                    raise ValueError("Format tọa độ không hợp lệ")
-        except UnicodeDecodeError:
-            raise HTTPException(status_code=400, detail="File phải là text file với encoding UTF-8")
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Nội dung file không đúng format: {str(e)}")
-        
-        # Upload file với tên cố định là roi_info.txt
+        # Upload to Azure Storage
         blob_client = container_client.get_blob_client("roi_info.txt")
+        blob_client.upload_blob(contents, blob_type="BlockBlob", overwrite=True)
         
-        # Nếu blob đã tồn tại, xóa nó
-        try:
-            blob_client.delete_blob()
-        except:
-            pass
-        
-        # Upload file mới
-        blob_client.upload_blob(content, overwrite=True)
-        
-        return {
-            "message": "File roi_info.txt đã được cập nhật thành công",
-            "uploaded_at": datetime.utcnow().isoformat()
-        }
+        return JSONResponse(
+            status_code=200,
+            content={"message": "ROI info uploaded successfully"}
+        )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Lỗi khi cập nhật file: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/v1/config/roi-info/")
-async def get_roi_info(container_client = Depends(get_config_client)):  # Sử dụng config container
-    """Lấy nội dung file roi_info.txt"""
+@app.get("/api/v1/config/roi-info")
+async def get_roi_info():
     try:
-        # Lấy blob client cho roi_info.txt
+        container_client = get_config_client()
         blob_client = container_client.get_blob_client("roi_info.txt")
         
-        # Download nội dung file
+        # Download and read content
         download_stream = blob_client.download_blob()
-        content = download_stream.readall()
+        content = download_stream.readall().decode('utf-8')
         
-        # Decode nội dung từ bytes sang text
-        text_content = content.decode('utf-8')
-        
-        # Parse nội dung thành cấu trúc dễ đọc
-        roi_sets = []
-        current_set = None
-        
-        lines = text_content.split('\n')
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-                
-            if line.startswith("Bộ khung"):
-                if current_set:
-                    roi_sets.append(current_set)
-                current_set = {
-                    "name": line.split(':')[0].strip(),
-                    "count": int(line.split(':')[1].strip().split()[0]),
-                    "regions": []
-                }
-            elif line.startswith("("):
-                # Parse tọa độ
-                coords = tuple(map(int, line.strip("()\n").split(',')))
-                current_set["regions"].append({
-                    "x1": coords[0],
-                    "y1": coords[1],
-                    "x2": coords[2],
-                    "y2": coords[3]
-                })
-        
-        if current_set:
-            roi_sets.append(current_set)
-        
-        return {
-            "roi_sets": roi_sets,
-            "raw_content": text_content
-        }
+        return JSONResponse(
+            status_code=200,
+            content={"content": content}
+        )
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Lỗi khi đọc file roi_info.txt: {str(e)}")
+        raise HTTPException(status_code=404, detail=f"ROI info not found: {str(e)}")
 
 @app.post("/api/v1/process/ocr/{filename}")
 async def process_ocr(
