@@ -98,21 +98,37 @@ def get_roi_coordinates(set_order):
         coordinates = []
         
         for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
             if line.startswith('Bộ khung'):
-                if current_set is not None:
-                    if current_set == set_order:
-                        return coordinates
-                current_set = int(line.split(':')[0].split()[2])
-                coordinates = []
-            elif line.strip().startswith('('):
-                # Parse coordinates (x1, y1, x2, y2)
-                coords = line.strip('()').split(',')
-                coordinates.append([int(x.strip()) for x in coords])
+                # Extract set number from "Bộ khung X: Y vùng"
+                set_parts = line.split(':')
+                if len(set_parts) >= 1:
+                    set_number = set_parts[0].split()[2]  # Get the number after "Bộ khung"
+                    try:
+                        current_set = int(set_number)
+                        coordinates = []  # Reset coordinates for new set
+                    except ValueError:
+                        logger.error(f"Invalid set number format: {set_number}")
+                        continue
+            elif line.startswith('('):
+                try:
+                    # Parse coordinates (x1, y1, x2, y2)
+                    coords = line.strip('()').split(',')
+                    if len(coords) == 4:
+                        coords = [int(x.strip()) for x in coords]
+                        coordinates.append(coords)
+                except (ValueError, IndexError) as e:
+                    logger.error(f"Error parsing coordinates: {line}, Error: {str(e)}")
+                    continue
+            
+            # If we've found the target set and have coordinates, return them
+            if current_set == set_order and coordinates:
+                return coordinates
         
-        if current_set == set_order:
-            return coordinates
-        
-        raise ValueError(f"Set order {set_order} not found in ROI info")
+        raise ValueError(f"Set order {set_order} not found in ROI info or no coordinates found")
     except Exception as e:
         logger.error(f"Error getting ROI coordinates: {str(e)}")
         raise
@@ -299,10 +315,19 @@ def process_ocr():
     try:
         # Get current set order
         set_order_blob_client = set_order_container_client.get_blob_client('set_order.txt')
-        set_order = int(set_order_blob_client.download_blob().readall().decode('utf-8'))
+        set_order_str = set_order_blob_client.download_blob().readall().decode('utf-8').strip()
+        try:
+            set_order = int(set_order_str)
+        except ValueError:
+            logger.error(f"Invalid set order value: {set_order_str}")
+            return jsonify({'error': 'Invalid set order value'}), 400
         
         # Get ROI coordinates for current set order
-        roi_coordinates = get_roi_coordinates(set_order)
+        try:
+            roi_coordinates = get_roi_coordinates(set_order)
+        except ValueError as e:
+            logger.error(f"Error getting ROI coordinates: {str(e)}")
+            return jsonify({'error': str(e)}), 400
         
         # Get image from request
         if 'file' not in request.files:
@@ -317,17 +342,37 @@ def process_ocr():
         nparr = np.frombuffer(image_data, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
+        if img is None:
+            return jsonify({'error': 'Invalid image file'}), 400
+        
         # Process OCR for each ROI
         results = []
         for i, coords in enumerate(roi_coordinates):
-            x1, y1, x2, y2 = coords
-            roi = img[y1:y2, x1:x2]
-            text = process_image_with_tesseract(roi)
-            results.append({
-                'roi_index': i + 1,
-                'coordinates': coords,
-                'text': text
-            })
+            try:
+                x1, y1, x2, y2 = coords
+                # Ensure coordinates are within image bounds
+                x1 = max(0, min(x1, img.shape[1]))
+                y1 = max(0, min(y1, img.shape[0]))
+                x2 = max(0, min(x2, img.shape[1]))
+                y2 = max(0, min(y2, img.shape[0]))
+                
+                roi = img[y1:y2, x1:x2]
+                if roi.size == 0:
+                    logger.warning(f"Empty ROI at coordinates {coords}")
+                    continue
+                    
+                text = process_image_with_tesseract(roi)
+                results.append({
+                    'roi_index': i + 1,
+                    'coordinates': coords,
+                    'text': text if text else ''
+                })
+            except Exception as e:
+                logger.error(f"Error processing ROI {i + 1}: {str(e)}")
+                continue
+        
+        if not results:
+            return jsonify({'error': 'No valid ROIs processed'}), 400
         
         # Save results to OCR results container
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
